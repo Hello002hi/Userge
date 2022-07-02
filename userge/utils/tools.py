@@ -1,6 +1,6 @@
 # pylint: disable=missing-module-docstring
 #
-# Copyright (C) 2020-2021 by UsergeTeam@Github, < https://github.com/UsergeTeam >.
+# Copyright (C) 2020-2022 by UsergeTeam@Github, < https://github.com/UsergeTeam >.
 #
 # This file is part of < https://github.com/UsergeTeam/Userge > project,
 # and is released under the "GNU v3.0 License Agreement".
@@ -8,21 +8,27 @@
 #
 # All rights reserved.
 
+import asyncio
+import importlib
 import re
 import shlex
-import asyncio
 from os.path import basename, join, exists
-from emoji import get_emoji_regexp
-from typing import Tuple, List, Optional, Iterator, Union
+from typing import Tuple, List, Optional, Iterator, Union, Any
 
-from html_telegraph_poster import TelegraphPoster
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, User
+from pyrogram import enums
 
 import userge
 
 _LOG = userge.logging.getLogger(__name__)
+
 _BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)]\[buttonurl:/{0,2}(.+?)(:same)?])")
 _PTN_SPLIT = re.compile(r'(\.\d+|\.|\d+)')
+_PTN_URL = re.compile(r"(?:https?|ftp)://[^|\s]+\.[^|\s]+")
+
+
+def is_url(url: str) -> bool:
+    return bool(_PTN_URL.match(url))
 
 
 def sort_file_name_key(file_name: str) -> tuple:
@@ -83,11 +89,6 @@ def _sort_algo(data: List[str]) -> Iterator[Union[str, float]]:
         p1 = p2
 
 
-def demojify(string: str) -> str:
-    """ Remove emojis and other non-safe characters from string """
-    return get_emoji_regexp().sub(u'', string)
-
-
 def get_file_id_of_media(message: 'userge.Message') -> Optional[str]:
     """ get file_id """
     file_ = message.audio or message.animation or message.photo \
@@ -101,10 +102,19 @@ def get_file_id_of_media(message: 'userge.Message') -> Optional[str]:
 def humanbytes(size: float) -> str:
     """ humanize size """
     if not size:
-        return ""
+        return "0 B"
     power = 1024
     t_n = 0
-    power_dict = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
+    power_dict = {
+        0: '',
+        1: 'Ki',
+        2: 'Mi',
+        3: 'Gi',
+        4: 'Ti',
+        5: 'Pi',
+        6: 'Ei',
+        7: 'Zi',
+        8: 'Yi'}
     while size > power:
         size /= power
         t_n += 1
@@ -123,21 +133,6 @@ def time_formatter(seconds: float) -> str:
     return tmp[:-2]
 
 
-# https://github.com/UsergeTeam/Userge-Plugins/blob/master/plugins/anilist.py
-def post_to_telegraph(a_title: str, content: str) -> str:
-    """ Create a Telegram Post using HTML Content """
-    post_client = TelegraphPoster(use_api=True)
-    auth_name = "@theUserge"
-    post_client.create_api_token(auth_name)
-    post_page = post_client.post(
-        title=a_title,
-        author=auth_name,
-        author_url="https://t.me/theUserge",
-        text=content
-    )
-    return post_page['url']
-
-
 async def runcmd(cmd: str) -> Tuple[str, str, int, int]:
     """ run command in terminal """
     args = shlex.split(cmd)
@@ -153,17 +148,26 @@ async def runcmd(cmd: str) -> Tuple[str, str, int, int]:
 
 async def take_screen_shot(video_file: str, duration: int, path: str = '') -> Optional[str]:
     """ take a screenshot """
-    _LOG.info('[[[Extracting a frame from %s ||| Video duration => %s]]]', video_file, duration)
+    _LOG.info(
+        'Extracting a frame from %s ||| Video duration => %s',
+        video_file,
+        duration)
+
     ttl = duration // 2
-    thumb_image_path = path or join(userge.Config.DOWN_PATH, f"{basename(video_file)}.jpg")
+    thumb_image_path = path or join(
+        userge.config.Dynamic.DOWN_PATH,
+        f"{basename(video_file)}.jpg")
     command = f'''ffmpeg -ss {ttl} -i "{video_file}" -vframes 1 "{thumb_image_path}"'''
+
     err = (await runcmd(command))[1]
     if err:
         _LOG.error(err)
+
     return thumb_image_path if exists(thumb_image_path) else None
 
 
-def parse_buttons(markdown_note: str) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+def parse_buttons(
+        markdown_note: str) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
     """ markdown_note to string and buttons """
     prev = 0
     note_data = ""
@@ -175,7 +179,11 @@ def parse_buttons(markdown_note: str) -> Tuple[str, Optional[InlineKeyboardMarku
             n_escapes += 1
             to_check -= 1
         if n_escapes % 2 == 0:
-            buttons.append((match.group(2), match.group(3), bool(match.group(4))))
+            buttons.append(
+                (match.group(2),
+                 match.group(3),
+                 bool(
+                    match.group(4))))
             note_data += markdown_note[prev:match.start(1)]
             prev = match.end(1)
         else:
@@ -192,9 +200,9 @@ def parse_buttons(markdown_note: str) -> Tuple[str, Optional[InlineKeyboardMarku
 
 
 def is_command(cmd: str) -> bool:
-    commands = userge.userge.manager.enabled_commands
-    key = userge.Config.CMD_TRIGGER + cmd
-    _key = userge.Config.SUDO_TRIGGER + cmd
+    commands = userge.userge.manager.loaded_commands
+    key = userge.config.CMD_TRIGGER + cmd
+    _key = userge.config.SUDO_TRIGGER + cmd
 
     is_cmd = False
     if cmd in commands:
@@ -204,3 +212,56 @@ def is_command(cmd: str) -> bool:
     elif _key in commands:
         is_cmd = True
     return is_cmd
+
+
+def extract_entities(
+        message: Message, typeofentity: List[enums.MessageEntityType]) -> List[Union[str, User]]:
+    """ gets a message and returns a list of entity_type in the message
+    """
+    tero = []
+    entities = message.entities or message.caption_entities or []
+    text = message.text or message.caption or ""
+    for entity in entities:
+        url = None
+        cet = entity.type
+        if entity.type in [
+            enums.MessageEntityType.URL,
+            enums.MessageEntityType.MENTION,
+            enums.MessageEntityType.HASHTAG,
+            enums.MessageEntityType.CASHTAG,
+            enums.MessageEntityType.BOT_COMMAND,
+            enums.MessageEntityType.URL,
+            enums.MessageEntityType.EMAIL,
+            enums.MessageEntityType.PHONE_NUMBER,
+            enums.MessageEntityType.BOLD,
+            enums.MessageEntityType.ITALIC,
+            enums.MessageEntityType.UNDERLINE,
+            enums.MessageEntityType.STRIKETHROUGH,
+            enums.MessageEntityType.SPOILER,
+            enums.MessageEntityType.CODE,
+            enums.MessageEntityType.PRE,
+        ]:
+            offset = entity.offset
+            length = entity.length
+            url = text[offset:offset + length]
+
+        elif entity.type == enums.MessageEntityType.TEXT_LINK:
+            url = entity.url
+
+        elif entity.type == enums.MessageEntityType.TEXT_MENTION:
+            url = entity.user
+
+        if url and cet in typeofentity:
+            tero.append(url)
+    return tero
+
+
+def get_custom_import_re(req_module, re_raise=True) -> Any:
+    """ import custom modules dynamically """
+    try:
+        return importlib.import_module(req_module)
+    except (ModuleNotFoundError, ImportError):
+        if re_raise:
+            raise
+
+        return None

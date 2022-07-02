@@ -1,6 +1,6 @@
 # pylint: disable=missing-module-docstring
 #
-# Copyright (C) 2020-2021 by UsergeTeam@Github, < https://github.com/UsergeTeam >.
+# Copyright (C) 2020-2022 by UsergeTeam@Github, < https://github.com/UsergeTeam >.
 #
 # This file is part of < https://github.com/UsergeTeam/Userge > project,
 # and is released under the "GNU v3.0 License Agreement".
@@ -16,8 +16,9 @@ from pyrogram.errors.exceptions import FloodWait
 
 import userge
 from .tools import humanbytes, time_formatter
+from .. import config
 
-_TASKS: Dict[str, Tuple[int, int]] = {}
+_TASKS: Dict[str, Tuple[float, float]] = {}
 
 
 async def progress(current: int,
@@ -25,19 +26,19 @@ async def progress(current: int,
                    message: 'userge.Message',
                    ud_type: str,
                    file_name: str = '',
-                   delay: int = userge.Config.EDIT_SLEEP_TIMEOUT) -> None:
+                   delay: int = config.Dynamic.EDIT_SLEEP_TIMEOUT) -> None:
     """ progress function """
     if message.process_is_canceled:
         await message.client.stop_transmission()
-    task_id = f"{message.chat.id}.{message.message_id}"
+    task_id = f"{message.chat.id}.{message.id}"
     if current == total:
         if task_id not in _TASKS:
             return
         del _TASKS[task_id]
         try:
-            await message.try_to_edit("`finalizing process ...`")
+            await message.edit("`finalizing process ...`")
         except FloodWait as f_e:
-            time.sleep(f_e.x)
+            time.sleep(f_e.value)
         return
     now = time.time()
     if task_id not in _TASKS:
@@ -60,9 +61,9 @@ async def progress(current: int,
         progress_str = progress_str.format(
             ud_type,
             file_name,
-            ''.join((userge.Config.FINISHED_PROGRESS_STR
+            ''.join((userge.config.FINISHED_PROGRESS_STR
                      for _ in range(floor(percentage / 5)))),
-            ''.join((userge.Config.UNFINISHED_PROGRESS_STR
+            ''.join((userge.config.UNFINISHED_PROGRESS_STR
                      for _ in range(20 - floor(percentage / 5)))),
             round(percentage, 2),
             humanbytes(current),
@@ -70,6 +71,6 @@ async def progress(current: int,
             humanbytes(speed),
             time_to_completion if time_to_completion else "0 s")
         try:
-            await message.try_to_edit(progress_str)
+            await message.edit(progress_str)
         except FloodWait as f_e:
-            time.sleep(f_e.x)
+            time.sleep(f_e.value)
